@@ -185,3 +185,62 @@ func (s *SocketService) Broadcast(msg *Message) {
 		return true
 	})
 }
+
+// Broadcast Broadcast to all connections with filter
+func (s *SocketService) BroadcastFilter(msg *Message, fn func(*Session) bool) error {
+	if s.status != STRunning {
+		return errors.New("server is stoped")
+	}
+
+	s.sessions.Range(func(k, v interface{}) bool {
+		s := v.(*Session)
+		if fn(s) == true {
+			if err := s.GetConn().SendMessage(msg); err != nil {
+				// log.Println(err)
+			}
+		}
+		return true
+	})
+	return nil
+}
+
+func (s *SocketService) AcceptOther(id string, connRaw net.Conn) {
+	conn := NewConn(connRaw, s.hbInterval, s.hbTimeout)
+	session := NewSession(conn)
+	// 设置类型为发送者（本机需要同步给其他节点）
+	session.SetSetting("type", "sender")
+	session.BindUserID(id)
+	s.sessions.Store(session.GetSessionID(), session)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	connctx, cancel := context.WithCancel(ctx)
+
+	defer func() {
+		cancel()
+		conn.Close()
+		s.sessions.Delete(session.GetSessionID())
+	}()
+
+	go conn.readCoroutine(connctx)
+	go conn.writeCoroutine(connctx)
+
+	if s.onConnect != nil {
+		s.onConnect(session)
+	}
+
+	for {
+		select {
+		case err := <-conn.done:
+
+			if s.onDisconnect != nil {
+				s.onDisconnect(session, err)
+			}
+			return
+
+		case msg := <-conn.messageCh:
+			if s.onMessage != nil {
+				s.onMessage(session, msg)
+			}
+		}
+	}
+}

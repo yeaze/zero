@@ -1,12 +1,13 @@
 package zero
 
 import (
-	"bytes"
-	"context"
-	"encoding/binary"
 	"io"
 	"net"
 	"time"
+	"bytes"
+	"errors"
+	"context"
+	"encoding/binary"
 )
 
 // Conn wrap net.Conn
@@ -122,6 +123,11 @@ func (c *Conn) readCoroutine(ctx context.Context) {
 			err = binary.Read(bufReader, binary.LittleEndian, &dataSize)
 			if err != nil {
 				c.done <- err
+				continue
+			}
+			
+			if dataSize < 0 {
+				c.done <- errors.New("closed")
 				continue
 			}
 
